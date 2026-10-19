@@ -1,0 +1,13 @@
+# Litestream continuously copies the SQLite DB to the agent's own Cloudflare R2 bucket.
+# All values come from environment variables set on Render.
+dbs:
+  - path: /app/data/agent.db
+    replicas:
+      - type: s3
+        endpoint: ${LITESTREAM_ENDPOINT}          # https://<acct>.r2.cloudflarestorage.com
+        bucket: ${LITESTREAM_BUCKET}
+        path: fcaagent
+        region: ${LITESTREAM_REGION}              # R2: "auto"
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        force-path-style: true

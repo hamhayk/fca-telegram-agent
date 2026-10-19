@@ -1,0 +1,16 @@
+# Linux server: copy to /etc/systemd/system/, adjust paths/user, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fca-agent
+[Unit]
+Description=Fca Soft Telegram Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fca
+WorkingDirectory=/opt/telegram-agent
+ExecStart=/opt/telegram-agent/.venv/bin/python run.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+.env
+data/
+tests/
+windows/
+deploy/
+*.md
+__pycache__/

@@ -1,0 +1,25 @@
+# Render Blueprint: a free Docker web service, like Charge Log. Telegram calls it (webhook), which wakes it up.
+# Tablets and releases are kept in SQLite and streamed to Cloudflare R2 by Litestream.
+# In Render: New > Blueprint > connect this repo (branch main), then fill in the values below.
+services:
+  - type: web
+    name: fca-telegram-agent
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: BOT_TOKEN
+        sync: false   # from @BotFather
+      - key: ADMIN_IDS
+        sync: false   # your Telegram id: 368674520
+      - key: LITESTREAM_ENDPOINT
+        sync: false   # https://<acct>.r2.cloudflarestorage.com, own bucket (not Charge Log's)
+      - key: LITESTREAM_BUCKET
+        sync: false   # fca-telegram-agent
+      - key: LITESTREAM_REGION
+        sync: false   # auto
+      - key: LITESTREAM_ACCESS_KEY_ID
+        sync: false
+      - key: LITESTREAM_SECRET_ACCESS_KEY
+        sync: false
