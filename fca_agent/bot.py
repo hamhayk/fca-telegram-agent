@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 ADMIN_HELP = f"""<b>Fca Soft Telegram Agent v{VERSION}</b>
 
 <b>Release a new version</b>
-Send me the APK as a file. The name must carry the version, e.g. <code>FcaSoft-v1.4.2.apk</code>.
+Put the APK in the Drive folder (I check every minute), or send it to me as a file. The name must carry the version, e.g. <code>FcaSoft-v1.4.2.apk</code>.
 Anything you write in the caption is sent to the branches as release notes.
 I will ask you to approve before anything reaches the tablets.
 
@@ -39,6 +39,7 @@ I will ask you to approve before anything reaches the tablets.
 /status [release id] – who received and installed it (latest if no id)
 /resend &lt;release id&gt; – send again to tablets that have not installed it
 
+/check – look in the Drive folder for a new APK now
 /backup – send me a copy of the database
 /about – version"""
 
@@ -46,6 +47,13 @@ TABLET_HELP = f"""<b>Fca Soft Telegram Agent v{VERSION}</b>
 
 New versions of FCA software approved for your branch will arrive in this chat.
 Open the file to install it, then tap <b>Installed</b> under the message."""
+
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # Telegram Bot API limit for files a bot uploads itself
+
+
+def already_released_text(app_name: str, version: str) -> str:
+    return f"<b>{esc(app_name)} v{esc(version)}</b> was already sent to the tablets. Raise the version and send the new file."
 
 
 def esc(value) -> str:
@@ -65,9 +73,12 @@ class Agent:
         return update.effective_user is not None and update.effective_user.id in self.config.admin_ids
 
     async def notify_admins(self, context: ContextTypes.DEFAULT_TYPE, text: str, markup=None) -> None:
+        await self.notify_admins_bot(context.bot, text, markup)
+
+    async def notify_admins_bot(self, bot, text: str, markup=None) -> None:
         for admin_id in self.config.admin_ids:
             try:
-                await context.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                await bot.send_message(admin_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
             except TelegramError as e:
                 log.warning("Could not reach admin %s: %s", admin_id, e)
 
@@ -140,24 +151,58 @@ class Agent:
             )
             return
         app_name, version = parsed
+        if self.store.approved_release_exists(app_name, version):
+            await update.message.reply_html(already_released_text(app_name, version))
+            return
         notes = (update.message.caption or "").strip()
         release_id = self.store.add_release(
             app_name, version, doc.file_id, doc.file_name, doc.file_size, notes, update.effective_user.id
         )
+        text, buttons = self.release_prompt(release_id)
+        await update.message.reply_html(text, reply_markup=buttons)
+
+    def release_prompt(self, release_id: int):
+        """The 'approve this release?' message and its buttons."""
+        release = self.store.release(release_id)
         active = self.store.tablets("active")
-        size_mb = (doc.file_size or 0) / 1_048_576
+        size_mb = (release["file_size"] or 0) / 1_048_576
         buttons = InlineKeyboardMarkup([[
             InlineKeyboardButton(f"✅ Approve and send to {len(active)} tablets", callback_data=f"rel:ok:{release_id}"),
         ], [
             InlineKeyboardButton("❌ Cancel", callback_data=f"rel:no:{release_id}"),
         ]])
-        await update.message.reply_html(
-            f"📦 <b>{esc(app_name)} v{esc(version)}</b> ({size_mb:.1f} MB), release #{release_id}\n"
-            f"Notes: {esc(notes) or '<i>none</i>'}\n\n"
+        text = (
+            f"📦 <b>{esc(release['app_name'])} v{esc(release['version'])}</b> ({size_mb:.1f} MB), release #{release_id}\n"
+            f"Notes: {esc(release['notes']) or '<i>none</i>'}\n\n"
             f"Branches: {', '.join(esc(t['branch'] or '#' + str(t['id'])) for t in active) or '<i>no active tablets yet</i>'}\n\n"
-            "Approve to send it now?",
-            reply_markup=buttons,
+            "Approve to send it now?"
         )
+        return text, buttons
+
+    async def upload_release(self, bot, data: bytes, file_name: str, notes: str, caption: str = "🏗 New build received") -> int:
+        """A build pushed an APK: put it on Telegram via the admin chat and ask for approval.
+
+        Raises ValueError with a readable reason when the file can't become a release.
+        """
+        parsed = parse_apk_name(file_name)
+        if not parsed:
+            raise ValueError(f"'{file_name}' is not an .apk with a version in its name, e.g. FcaSoft-v1.4.2.apk")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"{len(data) / 1_048_576:.0f} MB is over Telegram's 50 MB limit for bots; send this one by hand")
+        app_name, version = parsed
+        if self.store.approved_release_exists(app_name, version):
+            raise ValueError(f"{app_name} v{version} was already sent to the tablets; raise the version and build again")
+        if not self.config.admin_ids:
+            raise ValueError("ADMIN_IDS is not set, so nobody could approve it")
+        first_admin, *other_admins = sorted(self.config.admin_ids)
+        # Uploading to the admin chat both shows Hayk the file and gives us a file_id to forward later
+        message = await bot.send_document(first_admin, data, filename=file_name, caption=caption)
+        doc = message.document
+        release_id = self.store.add_release(app_name, version, doc.file_id, file_name, doc.file_size, notes, first_admin)
+        text, buttons = self.release_prompt(release_id)
+        for admin_id in [first_admin, *other_admins]:
+            await bot.send_message(admin_id, text, parse_mode=ParseMode.HTML, reply_markup=buttons)
+        return release_id
 
     async def on_release_decision(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -303,6 +348,22 @@ class Agent:
         ok, failed = await self.deliver(context, release, targets)
         await update.message.reply_text(f"Re-sent to {ok} tablet(s); {len(failed)} failed. See /status {release['id']}.")
 
+    async def cmd_check(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self.is_admin(update):
+            return
+        watcher = context.bot_data.get("drive")
+        if not watcher:
+            await update.message.reply_text("No Drive folder is set up. See deploy/drive-folder.md.")
+            return
+        try:
+            found = await watcher.check_once(context.bot)
+        except Exception as e:  # report Drive problems to the admin instead of failing silently
+            log.exception("Manual Drive check failed")
+            await update.message.reply_text(f"Could not read the Drive folder: {e}")
+            return
+        if not found:
+            await update.message.reply_text("No new APK in the Drive folder.")
+
     async def cmd_backup(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self.is_admin(update):
             return
@@ -323,6 +384,7 @@ class Agent:
 def build_application(config: Config, store: Store) -> Application:
     agent = Agent(config, store)
     app = Application.builder().token(config.bot_token).build()
+    app.bot_data["agent"] = agent  # the web upload endpoint reaches the agent through here
     private = filters.ChatType.PRIVATE
     app.add_handler(CommandHandler("start", agent.start, filters=private))
     app.add_handler(CommandHandler(["help", "about"], agent.cmd_help, filters=private))
@@ -333,6 +395,7 @@ def build_application(config: Config, store: Store) -> Application:
     app.add_handler(CommandHandler("status", agent.cmd_status, filters=private))
     app.add_handler(CommandHandler("resend", agent.cmd_resend, filters=private))
     app.add_handler(CommandHandler("backup", agent.cmd_backup, filters=private))
+    app.add_handler(CommandHandler("check", agent.cmd_check, filters=private))
     app.add_handler(MessageHandler(private & filters.Document.ALL, agent.on_document))
     app.add_handler(CallbackQueryHandler(agent.on_tablet_decision, pattern=r"^tab:(ok|no):\d+$"))
     app.add_handler(CallbackQueryHandler(agent.on_release_decision, pattern=r"^rel:(ok|no):\d+$"))

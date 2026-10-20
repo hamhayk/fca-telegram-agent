@@ -1,6 +1,7 @@
 """Run with:  python -m unittest discover tests"""
 
 import asyncio
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -134,6 +135,88 @@ class WebhookTest(unittest.TestCase):
         ok = client.post("/telegram", json=update, headers={"X-Telegram-Bot-Api-Secret-Token": webhook_secret("123:ABC")})
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(queue.qsize(), 1)
+
+
+class UploadTest(unittest.TestCase):
+    def setUp(self):
+        from starlette.testclient import TestClient
+        from fca_agent.web import build_web_app
+
+        tmp = Path(tempfile.mkdtemp())
+        self.store = Store(tmp / "agent.db")
+        self.agent = Agent(Config("123:ABC", frozenset({ADMIN}), tmp / "agent.db", tmp), self.store)
+        self.bot = MagicMock()
+        self.bot.send_document = AsyncMock(return_value=SimpleNamespace(
+            document=SimpleNamespace(file_id="UPLOADED", file_size=3)))
+        self.bot.send_message = AsyncMock()
+        app = SimpleNamespace(bot=self.bot, bot_data={"agent": self.agent}, update_queue=asyncio.Queue())
+        self.client = TestClient(build_web_app(app, "123:ABC"))
+        os.environ["UPLOAD_KEY"] = "s3cret"
+
+    def post(self, name, key="s3cret", notes="Build from CI"):
+        return self.client.post("/upload", headers={"Authorization": f"Bearer {key}"},
+                                files={"file": ("app-release.apk", b"APK")}, data={"name": name, "notes": notes})
+
+    def test_upload_asks_admin_and_waits(self):
+        self.assertEqual(self.post("FcaSoft-v1.5.0.apk", key="wrong").status_code, 401)
+        self.assertEqual(self.post("app-release.apk").status_code, 400)  # no version in the name
+
+        r = self.post("FcaSoft-v1.5.0.apk")
+        self.assertEqual(r.status_code, 200, r.text)
+        rel = self.store.release(r.json()["release"])
+        self.assertEqual((rel["app_name"], rel["version"], rel["file_id"], rel["status"], rel["notes"]),
+                         ("FcaSoft", "1.5.0", "UPLOADED", "pending", "Build from CI"))
+        # the APK went to the admin chat only, followed by the approve/cancel question
+        self.assertEqual(self.bot.send_document.call_args.args[0], ADMIN)
+        self.assertIn("rel:ok:", str(self.bot.send_message.call_args.kwargs["reply_markup"].to_dict()))
+
+        # once approved, the same version can't be pushed again
+        self.store.decide_release(rel["id"], "approved")
+        r = self.post("FcaSoft-v1.5.0.apk")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("already sent", r.json()["error"])
+
+
+class DriveTest(unittest.TestCase):
+    def test_new_apk_in_folder_is_proposed_once(self):
+        import json
+        import httpx
+        import rsa
+        from unittest.mock import patch
+        from fca_agent.drive import DriveWatcher
+
+        tmp = Path(tempfile.mkdtemp())
+        store = Store(tmp / "agent.db")
+        agent = Agent(Config("123:ABC", frozenset({ADMIN}), tmp / "agent.db", tmp), store)
+        key = rsa.newkeys(1024)[1].save_pkcs1().decode()
+        sa = json.dumps({"client_email": "bot@x.iam.gserviceaccount.com", "private_key": key, "private_key_id": "k",
+                         "token_uri": "https://oauth2.googleapis.com/token"})
+        watcher = DriveWatcher(agent, "FOLDER", sa)
+        files = [{"id": "old", "name": "FcaSoft-v1.0.0.apk", "size": "3", "md5Checksum": "a"}]
+
+        def handler(request: httpx.Request):
+            if request.url.host == "oauth2.googleapis.com":
+                return httpx.Response(200, json={"access_token": "T", "expires_in": 3600})
+            assert request.headers["Authorization"] == "Bearer T"
+            if request.url.params.get("alt") == "media":
+                return httpx.Response(200, content=b"APK")
+            return httpx.Response(200, json={"files": files})
+
+        real_client = httpx.AsyncClient
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        bot.send_document = AsyncMock(return_value=SimpleNamespace(document=SimpleNamespace(file_id="F", file_size=3)))
+        with patch("fca_agent.drive.httpx.AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler))):
+            self.assertEqual(asyncio.run(watcher.check_once(bot)), 0)  # first look: existing files are old
+            files.append({"id": "new", "name": "FcaSoft-v1.1.0.apk", "size": "3", "md5Checksum": "b"})
+            files.append({"id": "bad", "name": "FcaSoft-latest.apk", "size": "3", "md5Checksum": "c"})
+            self.assertEqual(asyncio.run(watcher.check_once(bot)), 1)
+            self.assertEqual(asyncio.run(watcher.check_once(bot)), 0)  # not asked twice
+
+        releases = store.releases()
+        self.assertEqual([(r["version"], r["status"]) for r in releases], [("1.1.0", "pending")])
+        texts = " ".join(str(c.args[1]) for c in bot.send_message.call_args_list)
+        self.assertIn("FcaSoft-latest.apk", texts)  # the admin is told why that one was skipped
 
 
 if __name__ == "__main__":

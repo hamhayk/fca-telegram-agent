@@ -1,3 +1,5 @@
 python-telegram-bot==21.6
 starlette==0.41.3
 uvicorn==0.32.1
+python-multipart==0.0.17
+google-auth==2.36.0

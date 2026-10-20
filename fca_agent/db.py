@@ -65,7 +65,7 @@ class Store:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)  # one event loop uses it; tests use other threads
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
@@ -127,6 +127,12 @@ class Store:
 
     def releases(self, limit: int = 10):
         return self.conn.execute("SELECT * FROM releases ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def approved_release_exists(self, app_name: str, version: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM releases WHERE app_name=? COLLATE NOCASE AND version=? AND status='approved'",
+            (app_name, version),
+        ).fetchone() is not None
 
     def decide_release(self, release_id: int, status: str) -> bool:
         """Move a pending release to approved/cancelled. False if it was already decided."""

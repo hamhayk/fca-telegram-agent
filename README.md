@@ -1,4 +1,4 @@
-# Fca Soft Telegram Agent v0.1.0
+# Fca Soft Telegram Agent v0.2.0
 
 A Telegram bot that delivers new versions of FCA software (APK files) to the branch tablets, and only after you approve them.
 
@@ -6,7 +6,7 @@ A Telegram bot that delivers new versions of FCA software (APK files) to the bra
 
 1. **Each branch tablet** has its own Telegram account. On the tablet, open the bot and press **Start** (or send `/start Gyumri` to include the branch name).
 2. **You get a message** "New tablet wants to register" with **Approve** and **Reject** buttons. Once approved, the tablet receives the latest approved version straight away.
-3. **To release a version**, send the APK to the bot as a file. The file name must include the version, for example `FcaSoft-v1.4.2.apk`. Anything you write in the caption goes to the branches as release notes.
+3. **To release a version**, put the APK in the Google Drive folder (see [deploy/drive-folder.md](deploy/drive-folder.md)), send it to the bot as a file, or let your build upload it (see [deploy/auto-send.md](deploy/auto-send.md)). The file name must include the version, for example `FcaSoft-v1.4.2.apk`. Anything you write in the caption goes to the branches as release notes.
 4. The bot shows you the release and which branches will get it, with **Approve and send** and **Cancel** buttons. Nothing reaches the tablets until you approve.
 5. Each tablet receives the APK with an **Installed** button. When staff tap it, you get "Gyumri installed FcaSoft v1.4.2 (3/10)".
 
@@ -22,6 +22,7 @@ Only the Telegram accounts listed in `ADMIN_IDS` can upload, approve, or use the
 | `/releases` | Recent releases and their state |
 | `/status [release id]` | Per-branch delivery: ✅ installed, 📨 sent, ⚠️ failed, ⚪ not sent |
 | `/resend <release id>` | Send again to every tablet that has not confirmed the install |
+| `/check` | Look in the Drive folder for a new APK right now |
 | `/backup` | Sends you the database as `FcaSoftAgent_backup_YYYY-MM-DD_HHmm.db` |
 | `/help`, `/about` | Help and the agent's version |
 
