@@ -45,7 +45,9 @@ class DriveWatcher:
         token_uri = self.info.get("token_uri", "https://oauth2.googleapis.com/token")
         assertion = jwt.encode(self.signer, {"iss": self.email, "scope": SCOPE, "aud": token_uri, "iat": now, "exp": now + 3600})
         r = await client.post(token_uri, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion})
-        r.raise_for_status()
+        if r.is_error:
+            # Google names the exact reason (invalid_grant, invalid_jwt, ...) in the body
+            raise RuntimeError(f"Drive login failed for {self.email}: {r.status_code} {r.text}")
         self._token, self._token_expires = r.json()["access_token"], now + r.json().get("expires_in", 3600)
         return self._token
 
