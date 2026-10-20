@@ -43,7 +43,7 @@ class DriveWatcher:
             return self._token
         now = int(time.time())
         token_uri = self.info.get("token_uri", "https://oauth2.googleapis.com/token")
-        assertion = jwt.encode(self.signer, {"iss": self.email, "scope": SCOPE, "aud": token_uri, "iat": now, "exp": now + 3600})
+        assertion = jwt.encode(self.signer, {"iss": self.email, "scope": SCOPE, "aud": token_uri, "iat": now, "exp": now + 3600}).decode()  # bytes would be sent as "b'...'"
         r = await client.post(token_uri, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion})
         if r.is_error:
             # Google names the exact reason (invalid_grant, invalid_jwt, ...) in the body

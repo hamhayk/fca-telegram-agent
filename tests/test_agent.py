@@ -196,6 +196,8 @@ class DriveTest(unittest.TestCase):
 
         def handler(request: httpx.Request):
             if request.url.host == "oauth2.googleapis.com":
+                assertion = dict(httpx.QueryParams(request.content.decode()))["assertion"]
+                assert assertion.count(".") == 2 and not assertion.startswith("b'"), assertion
                 return httpx.Response(200, json={"access_token": "T", "expires_in": 3600})
             assert request.headers["Authorization"] == "Bearer T"
             if request.url.params.get("alt") == "media":
