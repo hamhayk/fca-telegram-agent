@@ -13,6 +13,10 @@ services:
         sync: false   # from @BotFather
       - key: ADMIN_IDS
         sync: false   # your Telegram id: 368674520
+      - key: UPLOAD_KEY
+        generateValue: true   # secret your build uses to send APKs to /upload
+      # Optional, added by hand in the Environment tab (see deploy/drive-folder.md):
+      # DRIVE_FOLDER_ID and GOOGLE_SERVICE_ACCOUNT_JSON make the bot watch a Google Drive folder for new APKs.
       - key: LITESTREAM_ENDPOINT
         sync: false   # https://<acct>.r2.cloudflarestorage.com, own bucket (not Charge Log's)
       - key: LITESTREAM_BUCKET

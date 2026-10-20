@@ -23,6 +23,17 @@ if __name__ == "__main__":
     if not config.admin_ids:
         logging.warning("ADMIN_IDS is empty: send /start to the bot to see your id, then add it to .env")
     application = build_application(config, store)
+    if os.environ.get("DRIVE_FOLDER_ID") and os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
+        from fca_agent.drive import DriveWatcher, start_drive_watcher
+
+        application.bot_data["drive"] = DriveWatcher(
+            application.bot_data["agent"], os.environ["DRIVE_FOLDER_ID"], os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+        )
+
+        async def _start_watcher(app):
+            start_drive_watcher(app)
+
+        application.post_init = _start_watcher  # polling mode; webhook mode starts it in web.py
     public_url = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
     if public_url:
         from fca_agent.web import run_webhook
